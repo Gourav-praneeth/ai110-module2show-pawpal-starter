@@ -22,7 +22,15 @@ I planned the app around four building blocks: **Owner** (stores your name and f
 - Did your design change during implementation?
 - If yes, describe at least one change and why you made it.
 
-Yes. I realized the Scheduler also needed to write a short explanation for why it chose that order — not just give a list. So I added a "reasoning" output so the user could understand the plan, not just follow it blindly.
+Yes — after reviewing the code with AI feedback, four issues were found and fixed:
+
+1. **Skipped tasks were silently lost.** The original code had a line that did nothing when a task didn't fit in the schedule. I added a `skipped_tasks` list to `Schedule` so the user can see what got left out and why (e.g. "not enough time remaining").
+
+2. **Two sources of truth for tasks.** The `Scheduler` was receiving both a `Pet` object (which already holds tasks) and a separate `tasks` list. This meant the same data lived in two places, which could cause them to fall out of sync. I removed the separate `tasks` parameter — now the Scheduler always gets tasks from `pet.get_tasks()`.
+
+3. **No check on priority values.** The `Task` class accepted any string as a priority. If someone typed `"HIGH"` or `"urgent"` by mistake, it would silently sort to the very bottom of the schedule. I added a `__post_init__` check that raises a clear error if the priority is not `"low"`, `"medium"`, or `"high"`.
+
+4. **`Task` had an unused `reason` field.** The original design gave `Task` a `reason` field, but `Schedule` already stores explanations separately. Having both was confusing and redundant, so I removed it from `Task`.
 
 ---
 
