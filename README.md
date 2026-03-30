@@ -35,6 +35,32 @@ The scheduler goes beyond a simple priority sort. Four logic improvements make i
 
 ---
 
+## Testing PawPal+
+
+### Run the test suite
+
+```bash
+python -m pytest
+```
+
+### What the tests cover
+
+| Test | Description |
+|---|---|
+| `test_mark_complete_changes_status` | Verifies that calling `mark_complete()` on a Task sets `completed` to `True`. |
+| `test_add_task_increases_pet_task_count` | Confirms that adding a Task to a Pet increases its task list by 1. |
+| `test_sort_tasks_returns_chronological_order` | Checks that `Scheduler.sort_tasks()` returns tasks ordered earliest-to-latest by their `HH:MM` start time. |
+| `test_expand_recurring_twice_daily_creates_two_entries` | Ensures a `"twice daily"` task expands into two entries, with the evening copy scheduled 8 hours after the original. |
+| `test_detect_conflicts_flags_duplicate_times` | Verifies that `Scheduler.detect_conflicts()` catches and reports tasks pinned to the exact same time slot. |
+
+### Confidence Level
+
+**4 / 5 stars**
+
+The core scheduling behaviors — task completion, pet task management, chronological sorting, recurring task expansion, and conflict detection — are all covered and passing. One star held back because edge cases such as non-clock time strings, tasks that exceed available time, and multi-pet conflict scenarios are not yet tested.
+
+---
+
 ## Getting started
 
 ### Setup
