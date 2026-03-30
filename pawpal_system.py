@@ -258,8 +258,24 @@ class Scheduler:
         return self.owner.get_all_pending_tasks()
 
     def sort_by_priority(self, tasks: List[Task]) -> List[Task]:
-        """Sort tasks so high priority comes first (original method, kept for compatibility)."""
-        return sorted(tasks, key=lambda t: PRIORITY_ORDER.get(t.priority, 99))
+        """
+        Sort tasks by priority first (high → medium → low), then by scheduled
+        time within each priority band (earliest first).
+
+        Primary key:   priority level — high tasks always appear before medium,
+                       medium before low, regardless of clock time.
+        Secondary key: scheduled time parsed from 'HH:MM' (non-clock strings sort last).
+
+        Args:
+            tasks: Any list of Task objects.
+
+        Returns:
+            A new sorted list; the original list is not modified.
+        """
+        return sorted(
+            tasks,
+            key=lambda t: (PRIORITY_ORDER.get(t.priority, 99), _parse_time(t.time))
+        )
 
     def sort_tasks(self, tasks: List[Task]) -> List[Task]:
         """
