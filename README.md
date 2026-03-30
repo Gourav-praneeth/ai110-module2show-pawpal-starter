@@ -14,10 +14,10 @@ You are building **PawPal+**, a Streamlit app that helps a pet owner plan care t
 ![Generated schedule](images/schedule.png)
 
 **Extra task view 1**
-![Extra task view 1](extraTask1.png)
+![Extra task view 1](images/extraTask1.png)
 
 **Extra task view 2**
-![Extra task view 2](extraTask2.png)
+![Extra task view 2](images/extraTask2.png)
 
 ## Scenario
 
