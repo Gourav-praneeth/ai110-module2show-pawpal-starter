@@ -50,6 +50,12 @@ The scheduler looks at **priority** (high-priority tasks like medicine go first)
 
 The scheduler always puts high-priority tasks first, even if a low-priority task would take less time and could be done quickly. This makes the day feel packed early on and lighter later but that is reasonable because pet health and safety should never be pushed to the end of the day just to balance the schedule.
 
+**Additional tradeoff — exact time match vs. overlapping duration check**
+
+The `detect_conflicts` method flags two tasks as conflicting only when they share the exact same `HH:MM` start time. It does not check whether their durations overlap (for example, a 30-minute task starting at 08:00 and a 15-minute task starting at 08:20 would overlap in reality, but the scheduler would not catch this).
+
+*Why this is reasonable:* Tasks in PawPal+ do not carry explicit end times — durations are estimated from frequency labels (`daily` = 30 min, `weekly` = 60 min), which are rough approximations rather than precise measurements. Building a full interval-overlap check on top of approximate durations would give a false sense of accuracy. The exact-match check is honest about what the app actually knows: it warns the owner when two tasks are pinned to the same start time, letting the owner decide how to resolve the conflict manually. A future version with user-entered durations could upgrade to interval overlap detection.
+
 ---
 
 ## 3. AI Collaboration

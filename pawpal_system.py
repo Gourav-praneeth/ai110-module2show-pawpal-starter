@@ -68,11 +68,24 @@ classDiagram
 ```
 """
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import List
 
 VALID_PRIORITIES = {"low", "medium", "high"}
 PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+# Single source of truth for how long each frequency type takes (minutes)
+TASK_DURATIONS = {"daily": 30, "twice daily": 15, "weekly": 60}
+
+
+def _parse_time(time_str: str) -> int:
+    """Convert 'HH:MM' to minutes since midnight. Returns 9999 for non-clock strings."""
+    try:
+        h, m = time_str.strip().split(":")
+        return int(h) * 60 + int(m)
+    except (ValueError, AttributeError):
+        return 9999
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +203,7 @@ class Schedule:
     explanations: List[str] = field(default_factory=list)
     skipped_tasks: List[Task] = field(default_factory=list)
     skipped_reasons: List[str] = field(default_factory=list)
+    conflicts: List[str] = field(default_factory=list)
     total_minutes: int = 0
 
     def add_task(self, task: Task, reason: str):
@@ -205,6 +219,11 @@ class Schedule:
             return "No tasks scheduled."
         owner_label = f" for {self.owner.name}" if self.owner else ""
         lines = [f"PawPal+ Daily Schedule{owner_label}", "=" * 35]
+        if self.conflicts:
+            lines.append("*** TIME CONFLICTS DETECTED ***")
+            for c in self.conflicts:
+                lines.append(f"  ! {c}")
+            lines.append("")
         for i, (task, reason) in enumerate(zip(self.ordered_tasks, self.explanations), 1):
             status = "✓" if task.completed else "○"
             lines.append(
@@ -234,33 +253,143 @@ class Scheduler:
         return self.owner.get_all_pending_tasks()
 
     def sort_by_priority(self, tasks: List[Task]) -> List[Task]:
-        """Sort tasks so high priority comes first."""
+        """Sort tasks so high priority comes first (original method, kept for compatibility)."""
         return sorted(tasks, key=lambda t: PRIORITY_ORDER.get(t.priority, 99))
+
+    def sort_tasks(self, tasks: List[Task]) -> List[Task]:
+        """
+        Sort tasks chronologically, breaking ties by priority.
+
+        Primary key:   scheduled time (earliest first), parsed from 'HH:MM'.
+                       Tasks with non-clock times (e.g. 'after meals') sort last.
+        Secondary key: priority level (high → medium → low) within the same slot.
+
+        Args:
+            tasks: Any list of Task objects.
+
+        Returns:
+            A new sorted list; the original list is not modified.
+        """
+        return sorted(
+            tasks,
+            key=lambda t: (_parse_time(t.time), PRIORITY_ORDER.get(t.priority, 99))
+        )
+
+    def filter_by_pet(self, pet_name: str) -> List[Task]:
+        """
+        Return all tasks belonging to a specific pet.
+
+        Args:
+            pet_name: The pet's name (case-insensitive).
+
+        Returns:
+            The pet's full task list, or an empty list if the name is not found.
+        """
+        for pet in self.owner.pets:
+            if pet.name.lower() == pet_name.lower():
+                return pet.get_tasks()
+        return []
+
+    def filter_by_status(self, completed: bool) -> List[Task]:
+        """
+        Return tasks across all pets filtered by completion status.
+
+        Args:
+            completed: Pass True for finished tasks, False for pending ones.
+
+        Returns:
+            A list of matching Task objects.
+        """
+        return [t for t in self.owner.get_all_tasks() if t.completed == completed]
+
+    def expand_recurring(self, tasks: List[Task]) -> List[Task]:
+        """
+        Expand 'twice daily' tasks so each appears twice in the schedule.
+
+        The second occurrence is created 8 hours after the original time
+        (e.g. 08:30 → 16:30) and labelled with '(evening)'. All other
+        frequencies are passed through unchanged.
+
+        Args:
+            tasks: Pending tasks before expansion.
+
+        Returns:
+            A new list where each 'twice daily' task produces two entries.
+        """
+        expanded = []
+        for task in tasks:
+            expanded.append(task)
+            if task.frequency == "twice daily":
+                original_minutes = _parse_time(task.time)
+                if original_minutes < 9999:
+                    second_total = original_minutes + 480  # +8 hours
+                    second_time = f"{second_total // 60:02d}:{second_total % 60:02d}"
+                else:
+                    second_time = "18:00"
+                second_instance = Task(
+                    description=f"{task.description} (evening)",
+                    time=second_time,
+                    frequency=task.frequency,
+                    priority=task.priority,
+                    completed=task.completed,
+                )
+                expanded.append(second_instance)
+        return expanded
+
+    def detect_conflicts(self, tasks: List[Task]) -> List[str]:
+        """
+        Identify tasks scheduled at the exact same clock time.
+
+        Conflict detection is intentionally kept as an exact-match check
+        (same 'HH:MM' string) rather than an overlap check. This is simpler
+        and sufficient for a single-owner daily planner where tasks are short
+        and do not carry explicit end times. See reflection.md § 2b for the
+        full tradeoff discussion.
+
+        Note: Tasks with non-clock time strings (e.g. 'after meals') are
+        excluded from conflict detection because their position is ambiguous.
+
+        Args:
+            tasks: The expanded task list (after expand_recurring).
+
+        Returns:
+            A sorted list of warning strings, one per conflicting time slot.
+            Returns an empty list when no conflicts exist.
+        """
+        time_buckets: dict = defaultdict(list)
+        for task in tasks:
+            if _parse_time(task.time) < 9999:
+                time_buckets[task.time].append(task)
+        conflicts = []
+        for time_slot, slot_tasks in sorted(time_buckets.items()):
+            if len(slot_tasks) > 1:
+                names = ", ".join(f"'{t.description}'" for t in slot_tasks)
+                conflicts.append(f"{time_slot}: {names}")
+        return conflicts
 
     def fits_in_time(self, task: Task, remaining_minutes: int) -> bool:
         """Check whether a task can still fit in the remaining time."""
-        # Each task is assumed to take a fixed block of time based on frequency:
-        # daily = 30 min block, twice daily = 15 min, weekly = 60 min
-        estimated = {"daily": 30, "twice daily": 15, "weekly": 60}
-        duration = estimated.get(task.frequency, 30)
+        duration = TASK_DURATIONS.get(task.frequency, 30)
         return duration <= remaining_minutes
 
     def schedule_day(self) -> Schedule:
         """
         Build today's plan:
         1. Gather all pending tasks across all pets.
-        2. Sort by priority (high first).
-        3. Fit tasks into the owner's available time.
-        4. Record skipped tasks with a reason.
+        2. Expand recurring (twice daily) tasks into two occurrences.
+        3. Detect and record any time conflicts.
+        4. Sort by scheduled time, then priority.
+        5. Fit tasks into the owner's available time, skipping what won't fit.
         """
         schedule = Schedule(owner=self.owner)
         remaining = self.owner.get_available_time()
-        sorted_tasks = self.sort_by_priority(self.get_all_tasks())
 
-        estimated_durations = {"daily": 30, "twice daily": 15, "weekly": 60}
+        expanded = self.expand_recurring(self.get_all_tasks())
+        schedule.conflicts = self.detect_conflicts(expanded)
+        sorted_tasks = self.sort_tasks(expanded)
 
         for task in sorted_tasks:
-            duration = estimated_durations.get(task.frequency, 30)
+            duration = TASK_DURATIONS.get(task.frequency, 30)
             if self.fits_in_time(task, remaining):
                 reason = (
                     f"Scheduled at {task.time} ({task.frequency})"

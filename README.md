@@ -22,6 +22,19 @@ Your final app should:
 - Display the plan clearly (and ideally explain the reasoning)
 - Include tests for the most important scheduling behaviors
 
+## Smarter Scheduling
+
+The scheduler goes beyond a simple priority sort. Four logic improvements make it more useful for real pet owners:
+
+| Feature | How it works |
+|---|---|
+| **Sort by time** | Tasks are ordered chronologically by their `HH:MM` start time, then by priority within the same slot — so the day reads like a real timeline. |
+| **Filter by pet / status** | `filter_by_pet("Mochi")` returns only Mochi's tasks. `filter_by_status(completed=False)` returns every unfinished task across all pets. |
+| **Recurring task expansion** | A `"twice daily"` task automatically generates a second occurrence 8 hours later (e.g. breakfast at 08:30 → evening meal at 16:30), so both instances appear in the daily plan. |
+| **Conflict detection** | Before building the schedule, the Scheduler scans for tasks pinned to the same start time and surfaces a clear warning — no silent overwrites, no crashes. |
+
+---
+
 ## Getting started
 
 ### Setup
