@@ -78,6 +78,11 @@ PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 # Single source of truth for how long each frequency type takes (minutes)
 TASK_DURATIONS = {"daily": 30, "twice daily": 15, "weekly": 60}
 
+# Weighted scoring constants
+PRIORITY_WEIGHT = {"high": 3, "medium": 2, "low": 1}
+# Weekly tasks are harder to reschedule than daily ones → rarity bonus
+FREQUENCY_RARITY = {"weekly": 2, "daily": 1, "twice daily": 0}
+
 
 def _parse_time(time_str: str) -> int:
     """Convert 'HH:MM' to minutes since midnight. Returns 9999 for non-clock strings."""
@@ -366,6 +371,61 @@ class Scheduler:
                 names = ", ".join(f"'{t.description}'" for t in slot_tasks)
                 conflicts.append(f"{time_slot}: {names}")
         return conflicts
+
+    def weighted_score(self, task: Task) -> float:
+        """
+        Compute a composite priority score for a task.
+
+        Score components:
+          • Task priority    (high=3, medium=2, low=1)  × 2  — most important dimension
+          • Pet priority     (high=3, medium=2, low=1)  × 1  — reflects the pet's overall care urgency
+          • Time urgency     +1 if the task is scheduled before noon (morning tasks
+                             are harder to defer because other commitments pile up later)
+          • Frequency rarity weekly=+2, daily=+1, twice-daily=+0 — weekly tasks
+                             can't simply be pushed to tomorrow, so they earn a bump
+
+        Higher score = should be attempted earlier in the day.
+
+        Args:
+            task: The Task to evaluate.
+
+        Returns:
+            A non-negative float; higher means more urgent.
+        """
+        task_weight = PRIORITY_WEIGHT.get(task.priority, 1) * 2
+
+        # Find which pet owns this task so we can include their priority
+        pet_weight = 1  # default if task is somehow orphaned
+        for pet in self.owner.pets:
+            if task in pet.tasks:
+                pet_weight = PRIORITY_WEIGHT.get(pet.priority, 1)
+                break
+
+        time_urgency = 1 if _parse_time(task.time) < 720 else 0  # before 12:00 → +1
+        rarity_bonus = FREQUENCY_RARITY.get(task.frequency, 0)
+
+        return task_weight + pet_weight + time_urgency + rarity_bonus
+
+    def rank_by_weight(self, tasks: List[Task]) -> List[Task]:
+        """
+        Return tasks sorted by composite weighted score (highest first).
+
+        Unlike sort_tasks (purely chronological) or sort_by_priority (single
+        dimension), rank_by_weight balances four factors simultaneously:
+        task priority, pet priority, time-of-day urgency, and frequency rarity.
+        Use this when you want the *most important* tasks surfaced first,
+        regardless of when they are scheduled.
+
+        Args:
+            tasks: Any list of Task objects.
+
+        Returns:
+            A new list sorted by descending score; ties broken by task priority.
+        """
+        return sorted(
+            tasks,
+            key=lambda t: (-self.weighted_score(t), PRIORITY_ORDER.get(t.priority, 99))
+        )
 
     def fits_in_time(self, task: Task, remaining_minutes: int) -> bool:
         """Check whether a task can still fit in the remaining time."""

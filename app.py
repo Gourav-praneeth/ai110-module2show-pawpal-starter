@@ -13,13 +13,13 @@ st.divider()
 # ---------------------------------------------------------------------------
 
 if "owner" not in st.session_state:
-    st.session_state.owner = None       # Owner object, created when user saves their info
+    st.session_state.owner = None
 
 if "pets" not in st.session_state:
-    st.session_state.pets = {}          # dict of pet_name → Pet object (supports multiple pets)
+    st.session_state.pets = {}
 
 if "active_pet" not in st.session_state:
-    st.session_state.active_pet = None  # which pet tasks are currently being added to
+    st.session_state.active_pet = None
 
 # ---------------------------------------------------------------------------
 # Section 1 — Owner setup
@@ -33,21 +33,19 @@ available_minutes = st.number_input(
 )
 
 if st.button("Save owner"):
-    # Call Owner() — creates a new Owner or updates available time if name changed
     if st.session_state.owner is None or st.session_state.owner.name != owner_name:
         st.session_state.owner = Owner(
             name=owner_name,
             available_minutes=int(available_minutes)
         )
-        st.session_state.pets = {}   # reset pets when owner changes
+        st.session_state.pets = {}
     else:
-        # Owner already exists — just update available time
         st.session_state.owner.available_minutes = int(available_minutes)
 
     st.success(f"Owner saved: {st.session_state.owner.name} ({available_minutes} min available today)")
 
 # ---------------------------------------------------------------------------
-# Section 2 — Add a Pet  →  calls owner.add_pet()
+# Section 2 — Add a Pet
 # ---------------------------------------------------------------------------
 
 st.divider()
@@ -63,21 +61,19 @@ if st.button("Add pet"):
     elif pet_name in st.session_state.pets:
         st.info(f"{pet_name} is already added.")
     else:
-        # Create a Pet object and register it with the Owner using add_pet()
         new_pet = Pet(name=pet_name, species=species, priority=pet_priority)
-        st.session_state.owner.add_pet(new_pet)             # ← calls owner.add_pet()
+        st.session_state.owner.add_pet(new_pet)
         st.session_state.pets[pet_name] = new_pet
         st.session_state.active_pet = pet_name
         st.success(f"Added {pet_name} ({species}) to {st.session_state.owner.name}'s care list.")
 
-# Show all pets currently registered with the owner
 if st.session_state.pets:
     st.markdown("**Pets registered:**")
     for name, pet in st.session_state.pets.items():
         st.markdown(f"- {name} ({pet.species}, {pet.priority} priority) — {len(pet.get_tasks())} task(s)")
 
 # ---------------------------------------------------------------------------
-# Section 3 — Add Tasks to a Pet  →  calls pet.add_task()
+# Section 3 — Add Tasks  (uses scheduler.sort_tasks + filter_by_status preview)
 # ---------------------------------------------------------------------------
 
 st.divider()
@@ -86,7 +82,6 @@ st.subheader("Step 3: Add Tasks")
 if not st.session_state.pets:
     st.info("Add a pet above before adding tasks.")
 else:
-    # Let the user choose which pet to add tasks to
     selected_pet_name = st.selectbox("Add task to which pet?", list(st.session_state.pets.keys()))
 
     col1, col2, col3, col4 = st.columns(4)
@@ -100,7 +95,6 @@ else:
         priority = st.selectbox("Priority", ["low", "medium", "high"], index=2)
 
     if st.button("Add task"):
-        # Create a Task object and add it to the selected pet using pet.add_task()
         new_task = Task(
             description=task_desc,
             time=task_time,
@@ -108,18 +102,77 @@ else:
             priority=priority
         )
         selected_pet = st.session_state.pets[selected_pet_name]
-        selected_pet.add_task(new_task)                     # ← calls pet.add_task()
+        selected_pet.add_task(new_task)
         st.success(f"Added '{task_desc}' to {selected_pet_name}'s task list.")
 
-    # Display all tasks for every pet
-    for name, pet in st.session_state.pets.items():
-        tasks = pet.get_tasks()                             # ← calls pet.get_tasks()
-        if tasks:
-            st.markdown(f"**{name}'s tasks:**")
-            st.table([t.to_dict() for t in tasks])
+    # Show all tasks sorted chronologically using Scheduler.sort_tasks()
+    if st.session_state.owner and st.session_state.owner.get_all_tasks():
+        scheduler_preview = Scheduler(owner=st.session_state.owner)
+
+        all_tasks = st.session_state.owner.get_all_tasks()
+        sorted_tasks = scheduler_preview.sort_tasks(all_tasks)       # ← sort_tasks()
+        pending_tasks = scheduler_preview.filter_by_status(completed=False)  # ← filter_by_status()
+        done_tasks = scheduler_preview.filter_by_status(completed=True)
+
+        # Quick stats
+        col_a, col_b, col_c = st.columns(3)
+        col_a.metric("Total tasks", len(all_tasks))
+        col_b.metric("Pending", len(pending_tasks))
+        col_c.metric("Completed", len(done_tasks))
+
+        st.markdown("**All tasks (sorted by time):**")
+        st.table([
+            {
+                "Description": t.description,
+                "Time": t.time,
+                "Frequency": t.frequency,
+                "Priority": t.priority,
+                "Done": "✓" if t.completed else "○",
+            }
+            for t in sorted_tasks
+        ])
+
+        # Inline conflict check using detect_conflicts()
+        expanded = scheduler_preview.expand_recurring(all_tasks)
+        conflicts = scheduler_preview.detect_conflicts(expanded)      # ← detect_conflicts()
+        if conflicts:
+            for c in conflicts:
+                st.warning(f"Time conflict detected: {c}")
 
 # ---------------------------------------------------------------------------
-# Section 4 — Generate Schedule  →  calls Scheduler.schedule_day()
+# Section 3b — Weighted Priority Ranking  ← third algorithmic capability
+# ---------------------------------------------------------------------------
+
+st.divider()
+st.subheader("Step 3b: Weighted Priority View")
+st.caption(
+    "Ranks tasks by a composite score: **task priority × 2** + **pet priority** "
+    "+ **morning urgency** (+1 if before noon) + **frequency rarity** "
+    "(weekly=+2, daily=+1). Higher score = more urgent."
+)
+
+if st.session_state.owner and st.session_state.owner.get_all_tasks():
+    sched_preview = Scheduler(owner=st.session_state.owner)
+    all_tasks_raw = st.session_state.owner.get_all_tasks()
+    ranked = sched_preview.rank_by_weight(all_tasks_raw)  # ← rank_by_weight()
+
+    st.markdown("**Tasks ranked by weighted composite score:**")
+    st.table([
+        {
+            "Rank": i,
+            "Description": t.description,
+            "Time": t.time,
+            "Task Priority": t.priority,
+            "Frequency": t.frequency,
+            "Score": sched_preview.weighted_score(t),  # ← weighted_score()
+        }
+        for i, t in enumerate(ranked, 1)
+    ])
+elif st.session_state.pets:
+    st.info("Add tasks in Step 3 to see the weighted ranking.")
+
+# ---------------------------------------------------------------------------
+# Section 4 — Generate Schedule
 # ---------------------------------------------------------------------------
 
 st.divider()
@@ -133,24 +186,40 @@ if st.button("Generate schedule"):
     elif not st.session_state.owner.get_all_pending_tasks():
         st.warning("Please add at least one task (Step 3).")
     else:
-        # Hand the Owner to the Scheduler — it pulls tasks from all pets automatically
-        scheduler = Scheduler(owner=st.session_state.owner)     # ← Scheduler(owner)
-        schedule = scheduler.schedule_day()                      # ← schedule_day()
+        scheduler = Scheduler(owner=st.session_state.owner)
+        schedule = scheduler.schedule_day()
 
-        st.success(f"Schedule built for {st.session_state.owner.name}!")
+        # ── Conflict warnings ──────────────────────────────────────────────
+        if schedule.conflicts:
+            for c in schedule.conflicts:
+                st.warning(f"⚠️ Time conflict: {c}")
+        else:
+            st.success(f"Schedule built for {st.session_state.owner.name} — no conflicts detected!")
 
-        # Scheduled tasks
+        # ── Scheduled tasks table ──────────────────────────────────────────
         if schedule.ordered_tasks:
             st.markdown("### Today's Plan")
-            for i, (task, reason) in enumerate(
-                zip(schedule.ordered_tasks, schedule.explanations), 1
-            ):
-                st.markdown(f"**{i}. {task.description}**")
-                st.caption(f"🕐 {task.time} | {task.frequency} | {task.priority} priority")
-                st.caption(f"Why: {reason}")
+            st.table([
+                {
+                    "#": i,
+                    "Task": task.description,
+                    "Time": task.time,
+                    "Frequency": task.frequency,
+                    "Priority": task.priority,
+                    "Why": reason,
+                }
+                for i, (task, reason) in enumerate(
+                    zip(schedule.ordered_tasks, schedule.explanations), 1
+                )
+            ])
 
-        # Skipped tasks
+        # ── Skipped tasks ──────────────────────────────────────────────────
         if schedule.skipped_tasks:
             st.markdown("### Could Not Fit Today")
-            for task, reason in zip(schedule.skipped_tasks, schedule.skipped_reasons):
-                st.markdown(f"- **{task.description}** — {reason}")
+            st.table([
+                {
+                    "Task": task.description,
+                    "Reason": reason,
+                }
+                for task, reason in zip(schedule.skipped_tasks, schedule.skipped_reasons)
+            ])
